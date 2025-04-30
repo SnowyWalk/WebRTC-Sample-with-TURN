@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebRTC DataChannel 텍스트 전송</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.min.js"></script>
+</head>
+
+<body>
+    <h1>WebRTC 1:1 텍스트 통신1</h1>
+
+    <div>
+        <textarea id="messageInput" placeholder="여기에 메시지를 입력하세요" rows="4" cols="50"></textarea>
+        <button id="sendMessage">메시지 전송</button>
+    </div>
+
+    <h3>받은 메시지</h3>
+    <div id="receivedMessages"></div>
+
+    <script>
+        const socket = io.connect('http://127.0.0.1:5000');  // 서버 주소
+        let peerConnection;
+        let dataChannel;
+        // const config = {
+        //     iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        // };
+
+        function fetchIce() {
+            const xhr = new XMLHttpRequest();
+            xhr.open('GET', 'http://127.0.0.1:5000/ice', false);
+            xhr.send(null);
+            if (xhr.status !== 200) {
+                console.error('ICE 서버 정보를 못 가져옴', xhr.status);
+                return [];
+            }
+
+            const { iceServers } = JSON.parse(xhr.responseText);
+            // turn 서버 항목에 dummy credential 추가
+            return iceServers.map(s => {
+                if (s.urls.startsWith('turn:')) {
+                return {
+                    urls:      s.urls,
+                    username:  'user',        // 아무 문자열이나 OK
+                    credential:'pass'         // 아무 문자열이나 OK
+                };
+                }
+                return s;
+            });
+        }
+
+        const iceServers = fetchIce();
+        console.log("ICE 서버:", iceServers);
+
+        peerConnection = new RTCPeerConnection({iceServers});
+        peerConnection.ondatachannel = (event) => {
+            dataChannel = event.channel;
+            console.log("Data channel received:", dataChannel);
+
+            dataChannel.onopen = () => console.log("Data channel is open");
+            dataChannel.onclose = () => console.log("Data channel is closed");
+            dataChannel.onmessage = (event) => {
+                const message = event.data;
+                const newMessage = document.createElement('p');
+                newMessage.textContent = "받은 메시지: " + message;
+                receivedMessages.appendChild(newMessage);
+            };
+        };
+        peerConnection.oniceconnectionstatechange = () => {
+            console.log('ICE 상태:', peerConnection.iceConnectionState);
+            if (peerConnection.iceConnectionState === 'connected' ||
+                peerConnection.iceConnectionState === 'completed') {
+                console.log('▶ 피어 간 ICE 연결 완료');
+            }
+        };
+        peerConnection.onconnectionstatechange = () => {
+            console.log('연결 상태:', peerConnection.connectionState);
+            if (peerConnection.connectionState === 'connected') {
+                console.log('▶ RTCPeerConnection 연결 완전 성공');
+            }
+        };
+
+
+
+        const messageInput = document.getElementById('messageInput');
+        const sendMessageButton = document.getElementById('sendMessage');
+        const receivedMessages = document.getElementById('receivedMessages');
+
+        // WebRTC 연결 시작
+        sendMessageButton.onclick = async function () {
+            if (!dataChannel) {
+                // 데이터 채널 설정
+                dataChannel = peerConnection.createDataChannel("chat");
+                dataChannel.onopen = () => console.log("Data channel is open");
+                dataChannel.onclose = () => console.log("Data channel is closed");
+                dataChannel.onmessage = (event) => {
+                    const message = event.data;
+                    const newMessage = document.createElement('p');
+                    newMessage.textContent = "받은 메시지: " + message;
+                    receivedMessages.appendChild(newMessage);
+                };
+
+
+                // Offer 만들기
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+                console.log("Sending offer:", offer);
+                socket.emit('offer', offer);
+
+            }
+            else {
+                sendMessage();
+                console.log("Data channel already exists. Sending message directly.");
+            }
+        };
+
+        // Offer를 받은 후 처리
+        socket.on('offer', async function (offer) {
+            console.log("Received offer:", offer);
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    console.log("on ice event. Sending ICE candidate:", event.candidate);
+                    socket.emit('ice_candidate', event.candidate);
+                }
+            };
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            console.log("Sending answer", answer);
+            socket.emit('answer', answer);
+        });
+
+        // Answer를 받은 후 처리
+        socket.on('answer', async function (answer) {
+            console.log("Received answer:", answer);
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    console.log("on ice event. Sending ICE candidate:", event.candidate);
+                    socket.emit('ice_candidate', event.candidate);
+                }
+            };
+        });
+
+        // ICE 후보를 받은 후 처리
+        socket.on('ice_candidate', function (candidate) {
+            console.log("Received ICE candidate:", candidate);
+            peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+        });
+
+        socket.on('msg', function (msg) {
+            console.log("Received message:", msg);
+        });
+
+        // 메시지 전송
+        function sendMessage() {
+            console.log("Sending message:", messageInput.value);
+            const message = messageInput.value;
+            dataChannel.send(message);
+            const newMessage = document.createElement('p');
+            newMessage.textContent = "보낸 메시지: " + message;
+            receivedMessages.appendChild(newMessage);
+            messageInput.value = '';  // 입력창 비우기
+        }
+
+        // 텍스트 메시지 전송 버튼 클릭 시
+        messageInput.addEventListener('keyup', function (event) {
+            if (event.key === 'Enter') {
+                sendMessage();
+            }
+        });
+    </script>
+</body>
+
+</html>

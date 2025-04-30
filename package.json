@@ -1,0 +1,15 @@
+{
+  "name": "webrtc-(flask)",
+  "version": "1.0.0",
+  "main": "turn.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "node-turn": "^0.0.6"
+  }
+}
